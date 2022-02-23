@@ -1,19 +1,33 @@
-import csv
+from datetime import datetime
+from dateutil import parser
+import apache_beam as beam
 
-def format_schema_to_dict(data):
-    with open('./schema.csv', newline='') as f:
-        schema = list(csv.reader(f))[0]
+def parse_lines(element):
+    return element.split(",")
 
-    data_dict = {schema[idx]:data.split(",")[idx] for idx in range(len(schema))}
+def filter_transactionAmount(element):
+    return float(element[3]) > 20.0
 
-    return data_dict
+def filter_timestamp(element):
+    dt_format1 = "%Y-%m-%d %H:%M:%S %Z"
+    dt_format2 = "%Y"
+    return datetime.strptime(element[0], dt_format1) >= datetime.strptime('2010', dt_format2)
 
+class format_timestamp(beam.DoFn):
+    def process(self, element):
+        str_format = "%Y-%m-%d"
+        date = str(parser.parse(element[0]).strftime(str_format))
+        amount = float(element[3])
+        yield [date, amount]
 
-def output_to_file(data, file_name):
-    f = open("{file_name}.csv".format(file_name=file_name), "a")
-    f.write(data)
-    f.close()
-
-
-if __name__ == '__main__':
-    format_schema_to_dict()
+@beam.ptransform_fn
+def compute_output_fn(pcoll):
+    return (
+        pcoll
+        | "ParseLines" >> beam.Map(parse_lines)
+        | "Filter transaction_amount>20" >> beam.Filter(filter_transactionAmount)
+        | "Filter timestamp<2010" >> beam.Filter(filter_timestamp)
+        | "Format_timestamp" >> beam.ParDo(format_timestamp())
+        | "Sum amount" >> beam.GroupBy(lambda x: x[0]).aggregate_field(lambda x: float(x[1]), sum, 'total_amount')
+        | "FormatOutput" >> beam.Map(lambda element: ", ".join(map(str, element)))
+        )
